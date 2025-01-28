@@ -1,3 +1,9 @@
+# Feature-Splatting with Fientuned CLIP
+Fork from https://github.com/vuer-ai/feature-splatting
+
+Using a Finetuned CLIP ViT-16/B Model to compare to LeRF, a Mask R-CNN Model and a combination out of ResNet50 and SAM.
+
+
 # feature-splatting-ns
 
 Official Nerfstudio implementation of Feature Splatting.
