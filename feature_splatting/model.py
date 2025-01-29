@@ -33,6 +33,7 @@ from feature_splatting.utils import (
     gaussian_editor
 )
 try:
+    # LW: Had to add function from newer projects to cuda file. gsplat doesnt include this in version 1.0.0
     from gsplat.cuda._torch_impl import _quat_to_rotmat
     from gsplat.rendering import rasterization
 except ImportError:
@@ -105,11 +106,15 @@ class FeatureSplattingModel(SplatfactoModel):
         self.btn_refresh_pca = ViewerButton("Refresh PCA Projection", cb_hook=lambda _: self.viewer_utils.reset_pca_proj())
         if "clip" in self.main_feature_name.lower():
             self.hint_text = ViewerText(name="Note:", disabled=True, default_value="Use , to separate labels")
+            
+            ## LW: Add positive self query to viewer embedding to get it rendered as pictures
             self.lang_1_pos_text = ViewerText(
                 name="Positive Text Queries",
-                default_value="",
+                default_value="", #A - Z-Buildings
                 cb_hook=lambda elem: self.viewer_utils.update_text_embedding('positive', elem.value),
             )
+            self.viewer_utils.update_text_embedding("positive", self.lang_1_pos_text.default_value)
+            
             self.lang_2_neg_text = ViewerText(
                 name="Negative Text Queries",
                 default_value="object",
@@ -476,7 +481,9 @@ class FeatureSplattingModel(SplatfactoModel):
             torch.exp(self.scales[split_mask].repeat(samps, 1)) * centered_samples
         )  # how these scales are rotated
         quats = self.quats[split_mask] / self.quats[split_mask].norm(dim=-1, keepdim=True)  # normalize them first
-        rots = quat_to_rotmat(quats.repeat(samps, 1))  # how these scales are rotated
+
+        ## LW: Added _ before quat_to_rotmat ...throwed an error
+        rots = _quat_to_rotmat(quats.repeat(samps, 1))  # how these scales are rotated
         rotated_samples = torch.bmm(rots, scaled_samples[..., None]).squeeze()
         new_means = rotated_samples + self.means[split_mask].repeat(samps, 1)
         # step 2, sample new colors

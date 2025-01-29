@@ -69,6 +69,14 @@ class MaskCLIPFeaturizer(nn.Module):
     def __init__(self, clip_model_name):
         super().__init__()
         self.model, self.preprocess = maskclip_onnx.clip.load(clip_model_name)
+        #surround
+        #self.model.load_state_dict(torch.load(r""))
+
+        #scene
+        #self.model.load_state_dict(torch.load(r""))
+
+        #big-surround
+        #self.model.load_state_dict(torch.load(r""))
         self.model.eval()
         self.patch_size = self.model.visual.patch_size
 

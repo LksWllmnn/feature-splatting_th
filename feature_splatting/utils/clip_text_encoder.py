@@ -7,6 +7,16 @@ class clip_text_encoder:
         self.clip_model_name = clip_model_name
         self.device = device
         self.clip, _ = maskclip_onnx.clip.load(self.clip_model_name, device=self.device)
+        
+        #surround
+        #self.clip.load_state_dict(torch.load(r""))
+
+        #scene
+        #self.clip.load_state_dict(torch.load(r""))
+
+        #big-surround
+        #self.clip.load_state_dict(torch.load(r""))
+        
         self.clip.eval()
 
     @torch.no_grad()

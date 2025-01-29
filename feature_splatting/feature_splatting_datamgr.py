@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Literal, Tuple, Type
 from nerfstudio.cameras.cameras import Cameras, CameraType
 
+from pathlib import Path
 import numpy as np
 import torch
 from jaxtyping import Float
@@ -89,6 +90,12 @@ class FeatureSplattingDataManager(FullImageDatamanager):
         cache_path = cache_dir / f"feature_splatting_{self.config.feature_type.lower()}_features.pt"
         if self.config.enable_cache and cache_path.exists():
             cache_dict = torch.load(cache_path)
+            
+            ##LW: Had to set a path manually to save the cache-files. original setup throd errors
+            #cache_dict = Path(r"...\big-surround")
+            #cache_dict = Path(r"...\surround")
+            #cache_dict = Path(r"...\scene")
+
             if cache_dict.get("image_fnames") != image_fnames:
                 CONSOLE.print("Image filenames have changed, cache invalidated...")
             elif cache_dict.get("args") != extract_args.id_dict():
