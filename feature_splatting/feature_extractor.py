@@ -69,6 +69,8 @@ class MaskCLIPFeaturizer(nn.Module):
     def __init__(self, clip_model_name):
         super().__init__()
         self.model, self.preprocess = maskclip_onnx.clip.load(clip_model_name)
+        
+        #LW: Added again Paths to models
         #surround
         #self.model.load_state_dict(torch.load(r""))
 

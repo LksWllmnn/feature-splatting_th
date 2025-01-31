@@ -8,6 +8,7 @@ class clip_text_encoder:
         self.device = device
         self.clip, _ = maskclip_onnx.clip.load(self.clip_model_name, device=self.device)
         
+        #LW: Added Paths to Models
         #surround
         #self.clip.load_state_dict(torch.load(r""))
 

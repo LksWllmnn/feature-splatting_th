@@ -8,7 +8,10 @@ class SAMCLIPArgs:
     dino_resolution: int = 800
     dinov2_model_name: str = 'dinov2_vits14'
     mobilesamv2_encoder_name: str = 'mobilesamv2_efficientvit_l2'
-    clip_model_name: str = 'ViT-L/14@336px'
+    
+    #LW: Using the smaller Model
+    #clip_model_name: str = 'ViT-L/14@336px'
+    clip_model_name: str = 'ViT-B/16'
     
     @classmethod
     def id_dict(cls):
