@@ -19,6 +19,8 @@ from nerfstudio.viewer.server.viewer_elements import (
 )
 from nerfstudio.data.scene_box import OrientedBox
 
+from nerfstudio.utils.colormaps import ColormapOptions, apply_colormap
+
 # Feature splatting functions
 from torch.nn import Parameter
 from feature_splatting.utils import (
@@ -234,140 +236,74 @@ class FeatureSplattingModel(SplatfactoModel):
 
         return selected_obj_idx, sample_idx
 
-    def get_outputs(self, camera: Cameras) -> Dict[str, Union[torch.Tensor, List]]:
-        """Takes in a camera and returns a dictionary of outputs.
-
-        Args:
-            camera: The camera(s) for which output images are rendered. It should have
-            all the needed information to compute the outputs.
-
-        Returns:
-            Outputs of model. (ie. rendered colors)
+    @torch.no_grad()
+    def get_outputs_for_camera(self, camera: Cameras, obb_box: Optional[OrientedBox] = None) -> Dict[str, torch.Tensor]:
+        """This function is not called during training, but used for visualization in browser. So we can use it to
+        add visualization not needed during training.
         """
-        if not isinstance(camera, Cameras):
-            print("Called get_outputs with not a camera")
-            return {}
-
-        if self.training:
-            assert camera.shape[0] == 1, "Only one camera at a time"
-            optimized_camera_to_world = self.camera_optimizer.apply_to_camera(camera)
-        else:
-            optimized_camera_to_world = camera.camera_to_worlds
-
-        # cropping
-        if self.crop_box is not None and not self.training:
-            crop_ids = self.crop_box.within(self.means).squeeze()
-            if crop_ids.sum() == 0:
-                return self.get_empty_outputs(
-                    int(camera.width.item()), int(camera.height.item()), self.background_color
-                )
-        else:
-            crop_ids = None
-
-        if crop_ids is not None:
-            opacities_crop = self.opacities[crop_ids]
-            means_crop = self.means[crop_ids]
-            features_dc_crop = self.features_dc[crop_ids]
-            features_rest_crop = self.features_rest[crop_ids]
-            scales_crop = self.scales[crop_ids]
-            quats_crop = self.quats[crop_ids]
-            distill_features_crop = self.distill_features[crop_ids]
-        else:
-            opacities_crop = self.opacities
-            means_crop = self.means
-            features_dc_crop = self.features_dc
-            features_rest_crop = self.features_rest
-            scales_crop = self.scales
-            quats_crop = self.quats
-            distill_features_crop = self.distill_features
-
-        # features_dc_crop.shape: [N, 3]
-        # features_rest_crop.shape: [N, 15, 3]
-        colors_crop = torch.cat((features_dc_crop[:, None, :], features_rest_crop), dim=1)
-        # colors_crop.shape: [N, 16, 3]
-
-        BLOCK_WIDTH = 16  # this controls the tile size of rasterization, 16 is a good default
-        camera_scale_fac = self._get_downscale_factor()
-        camera.rescale_output_resolution(1 / camera_scale_fac)
-        viewmat = get_viewmat(optimized_camera_to_world)
-        K = camera.get_intrinsics_matrices().cuda()
-        W, H = int(camera.width.item()), int(camera.height.item())
-        self.last_size = (H, W)
-        camera.rescale_output_resolution(camera_scale_fac)  # type: ignore
-
-        # apply the compensation of screen space blurring to gaussians
-        if self.config.rasterize_mode not in ["antialiased", "classic"]:
-            raise ValueError("Unknown rasterize_mode: %s", self.config.rasterize_mode)
-
-        if self.config.output_depth_during_training or not self.training:
-            # Actually render RGB, features, and depth, but can't use RGB+FEAT+ED because we hack gsplat
-            render_mode = "RGB+ED"
-        else:
-            render_mode = "RGB"
-
-        if self.config.sh_degree > 0:
-            sh_degree_to_use = min(self.step // self.config.sh_degree_interval, self.config.sh_degree)
-            assert self.config.python_compute_sh, "SH computation is only supported in python"
-            raise NotImplementedError("Python SHs computation not implemented yet")
-            sh_degree_to_use = None
-        else:
-            colors_crop = torch.sigmoid(colors_crop).squeeze(1)  # [N, 1, 3] -> [N, 3]
-            fused_render_properties = torch.cat((colors_crop, distill_features_crop), dim=1)
-            sh_degree_to_use = None
-
-        render, alpha, self.info = rasterization(
-            means=means_crop,
-            quats=quats_crop / quats_crop.norm(dim=-1, keepdim=True),
-            scales=torch.exp(scales_crop),
-            opacities=torch.sigmoid(opacities_crop).squeeze(-1),
-            colors=fused_render_properties,
-            viewmats=viewmat,  # [1, 4, 4]
-            Ks=K,  # [1, 3, 3]
-            width=W,
-            height=H,
-            tile_size=BLOCK_WIDTH,
-            packed=False,
-            near_plane=0.01,
-            far_plane=1e10,
-            render_mode=render_mode,
-            sh_degree=sh_degree_to_use,
-            sparse_grad=False,
-            absgrad=True,
-            rasterize_mode=self.config.rasterize_mode,
-            # set some threshold to disregrad small gaussians for faster rendering.
-            # radius_clip=3.0,
+        editing_dict = self.gaussian_editor.prepare_editing_dict(self.translation_vec.value, self.yaw_rotation.value, self.physics_sim_checkbox.value)
+        if self.edit_checkbox.value:
+            # Editing mode
+            self.gaussian_editor.pre_rendering_process(self.means, self.opacities, self.scales, self.quats,
+                                                       editing_dict=editing_dict,
+                                                       min_offset=torch.tensor(self.bbox_min_offset_vec.value).float().cuda() / 10.0,
+                                                       max_offset=torch.tensor(self.bbox_max_offset_vec.value).float().cuda() / 10.0,
+                                                       view_main_obj_only=self.main_obj_only_checkbox.value)
+        outs = super().get_outputs_for_camera(camera, obb_box)
+        if self.edit_checkbox.value:
+            self.gaussian_editor.post_rendering_process(self.means, self.opacities, self.quats, self.scales)
+        if self.physics_sim_checkbox.value:
+            # turn off feature rendering during physics sim for speed
+            return outs
+        # Consistent pca that does not flicker
+        outs["consistent_latent_pca"], self.viewer_utils.pca_proj, *_ = apply_pca_colormap_return_proj(
+            outs["feature"], self.viewer_utils.pca_proj
         )
+        # TODO(roger): this resize factor affects the resolution of similarity map. Maybe we should use a fixed size?
+        decoded_feature_dict = self.decode_features(outs["feature"], resize_factor=8)
+        if "clip" in self.main_feature_name.lower() and self.viewer_utils.is_embed_valid('positive'):
+            clip_features = decoded_feature_dict[self.main_feature_name]
+            clip_features /= clip_features.norm(dim=0, keepdim=True)
 
-        if self.training and self.info["means2d"].requires_grad:
-            self.info["means2d"].retain_grad()
-        self.xys = self.info["means2d"]  # [1, N, 2]
-        self.radii = self.info["radii"][0]  # [N]
-        alpha = alpha[:, ...]
+            # Use paired softmax method as described in the paper with positive and negative texts
+            if self.viewer_utils.is_embed_valid('negative'):
+                neg_embedding = self.viewer_utils.get_text_embed('negative')
+            else:
+                neg_embedding = self.viewer_utils.get_text_embed('canonical')
+            text_embs = torch.cat([self.viewer_utils.get_text_embed('positive'), neg_embedding], dim=0)
+            raw_sims = torch.einsum("chw,nc->nhw", clip_features, text_embs)
+            sim_shape_hw = raw_sims.shape[1:]
 
-        background = self._get_background_color()
-        rgb = render[:, ..., :3] + (1 - alpha) * background
-        rgb = torch.clamp(rgb, 0.0, 1.0)
+            raw_sims = raw_sims.reshape(raw_sims.shape[0], -1)
+            pos_sim = compute_similarity(raw_sims, self.viewer_utils.softmax_temp, self.viewer_utils.get_embed_shape('positive')[0])
+            #outs[f"composited"] = apply_colormap(p_i / (p_i.max() + 1e-6), ColormapOptions("turbo"))
+            
+            outs["similarity"] = pos_sim.reshape(sim_shape_hw + (1,)) # H, W, 1
+            # Upsample heatmap to match size of RGB image
+            # It's a bit slow since we do it on full resolution; but interpolation seems to have aliasing issues
+            assert outs["similarity"].shape[2] == 1
+            if outs["similarity"].shape[:2] != outs["rgb"].shape[:2]:
+                out_sim = outs["similarity"][:, :, 0]  # H, W
+                out_sim = out_sim[None, None, ...]  # 1, 1, H, W
+                #print(f"outs['similarity'] shape 1: {outs['similarity'].shape}")
+                outs["similarity"] = F.interpolate(out_sim, size=outs["rgb"].shape[:2], mode="bilinear", align_corners=False).squeeze()
+                #print(f"outs['similarity'] shape 2: {outs['similarity'].shape}")
+                outs["similarity"] = outs["similarity"][:, :, None]
+                #print(f"outs['similarity'] shape 3: {outs['similarity'].shape}")
+                
+                # Generate composited output
+                p_i = torch.clip(outs["similarity"] - 0.5, 0, 1)
+                #print(f"outs['similarity'] shape 2.5: {outs['similarity'].shape}")
+                outs["composited"] = apply_colormap(p_i / (p_i.max() + 1e-6), ColormapOptions("turbo"))
+                #print(f"outs['composited'] shape 1: {outs['composited'].shape}")
+                mask = (outs["similarity"] < 0.5).squeeze()
+                expanded_mask = mask.unsqueeze(-1).expand_as(outs["composited"])
+                #print(f"mask shape 1: {mask.shape}")
+                outs[f"composited"][expanded_mask] = outs["rgb"][expanded_mask]
+                outs["my_output"] = outs["composited"]
+                outs["my_output"][mask, :] = 0
 
-        if render_mode == "RGB+ED":
-            assert render.shape[3] == 3 + self.config.feat_latent_dim + 1
-            depth_im = render[:, ..., -1:]
-            depth_im = torch.where(alpha > 0, depth_im, depth_im.detach().max()).squeeze(0)
-        else:
-            assert render.shape[3] == 3 + self.config.feat_latent_dim
-            depth_im = None
-
-        if background.shape[0] == 3 and not self.training:
-            background = background.expand(H, W, 3)
-        
-        feature = render[:, ..., 3:3 + self.config.feat_latent_dim]
-
-        return {
-            "rgb": rgb.squeeze(0),  # type: ignore
-            "depth": depth_im,  # type: ignore
-            "accumulation": alpha.squeeze(0),  # type: ignore
-            "background": background,  # type: ignore,
-            "feature": feature.squeeze(0),  # type: ignore
-        }  # type: ignore
+        return outs
 
     def decode_features(self, features_hwc: torch.Tensor, resize_factor: float = 1.) -> Dict[str, torch.Tensor]:
         # Decode features
